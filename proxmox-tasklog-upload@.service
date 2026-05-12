@@ -1,0 +1,11 @@
+[Unit]
+Description=Upload failed Proxmox %i task logs to an HTTP relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/proxmox-logdump
+ExecStart=/usr/local/lib/proxmox-logdump/proxmox_tasklog_uploader.py --source %i --backfill-seen
+User=root
+Group=root

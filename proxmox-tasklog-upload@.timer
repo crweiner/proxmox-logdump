@@ -1,0 +1,11 @@
+[Unit]
+Description=Run failed Proxmox %i task-log uploads every 5 minutes
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=5m
+Persistent=true
+Unit=proxmox-tasklog-upload@%i.service
+
+[Install]
+WantedBy=timers.target
