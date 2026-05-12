@@ -32,6 +32,162 @@ Proxmox VE / PBS host
   -> Forgejo / Gitea / GitHub repository
 ```
 
+In the reference setup used here, the HTTP relay is Node-RED and the Git write is done through the Forgejo contents API. There is no local Git clone in the relay. Each successful file-create request becomes one Git commit.
+
+## Repository Layout
+
+The relay currently writes two top-level trees:
+
+```text
+events/
+task-logs/
+```
+
+Notification webhook payloads are stored as JSON:
+
+```text
+events/pve/YYYY/MM/DD/<stamp>_<host>_<kind>_<severity>_<nonce>.json
+events/pbs/YYYY/MM/DD/<stamp>_<host>_<kind>_<severity>_<nonce>.json
+```
+
+Examples:
+
+```text
+events/pve/2026/05/12/20260512T020000Z_pve-200_vzdump_error_8fce02.json
+events/pbs/2026/05/12/20260512T020100Z_pbs-56_syncjob_error_bc1fdb.json
+```
+
+Full task logs are stored as raw `.log` files:
+
+```text
+task-logs/pve/YYYY/MM/DD/<stamp>_<node>_<task_type>_<status>_<upid>.log
+task-logs/pbs/YYYY/MM/DD/<stamp>_<node>_<task_type>_<status>_<upid>.log
+```
+
+Examples:
+
+```text
+task-logs/pve/2026/05/11/20260511T210004Z_proxmox_vzdump_ERROR_UPID:proxmox:....log
+task-logs/pbs/2026/05/12/20260512T014817Z_pbs-56_syncjob_error_UPID:proxmox-backup-server:....log
+```
+
+The notification archive and the task-log archive are intentionally separate:
+
+- `events/` preserves the alert metadata that Proxmox emitted.
+- `task-logs/` preserves the full raw task transcript collected from the host.
+
+## Commit Behavior
+
+The current relay does not batch writes.
+
+- One inbound notification file create => one Forgejo commit
+- One inbound task-log file create => one Forgejo commit
+- The relay serializes writes at `1 request / second` to avoid Forgejo ref-lock races
+
+This means a burst of failures will appear in Forgejo as a burst of commits. That is expected with the current design.
+
+On first live collector run, older failed tasks inside the current task-list scan window are also uploaded. That can produce many commits all at once even if those failures happened hours earlier.
+
+Only commits whose messages start with one of these prefixes are part of normal runtime behavior:
+
+- `Archive Proxmox PVE notification`
+- `Archive Proxmox PBS notification`
+- `Archive Proxmox PVE task log`
+- `Archive Proxmox PBS task log`
+
+One-off setup and validation commits can also exist during installation or testing. Those are not part of steady-state operation.
+
+## Node-RED Relay Design
+
+The reference Node-RED flow exposes four HTTP endpoints:
+
+```text
+POST /webhook/proxmox/pve
+POST /webhook/proxmox/pbs
+POST /ingest/tasklog/pve
+POST /ingest/tasklog/pbs
+```
+
+Behavior:
+
+1. Validate the shared `X-Proxmox-Token` header.
+2. Normalize the payload.
+3. Build the destination repo path.
+4. Base64-encode the file content.
+5. Call the Forgejo contents API:
+
+```text
+POST /api/v1/repos/<owner>/<repo>/contents/<path>
+```
+
+6. Return the created path and commit URL to the caller.
+
+Important implementation detail: the flow serializes every Forgejo write through one shared delay node so concurrent notifications do not collide on `refs/heads/main`.
+
+## Proxmox Notification Setup
+
+The collector only handles full task logs. Notification webhooks are a separate Proxmox-side configuration and should also be documented because they explain why files appear under `events/`.
+
+### Recommended target names
+
+- PVE target: `node-red-pve`
+- PBS target: `node-red-pbs`
+
+### Recommended matcher name
+
+- `node-red-errors`
+
+### Webhook target configuration
+
+For Proxmox VE:
+
+- Method: `POST`
+- URL: `http://<relay-host>:1880/webhook/proxmox/pve`
+- Header: `X-Proxmox-Token: <shared-token>`
+- Content-Type: `application/json`
+
+Body template:
+
+```json
+{
+  "source": "pve",
+  "title": "{{ escape title }}",
+  "message": "{{ escape message }}",
+  "severity": "{{ severity }}",
+  "timestamp": {{ timestamp }},
+  "fields": {{ json fields }}
+}
+```
+
+For Proxmox Backup Server:
+
+- Method: `POST`
+- URL: `http://<relay-host>:1880/webhook/proxmox/pbs`
+- Header: `X-Proxmox-Token: <shared-token>`
+- Content-Type: `application/json`
+
+Body template:
+
+```json
+{
+  "source": "pbs",
+  "title": "{{ escape title }}",
+  "message": "{{ escape message }}",
+  "severity": "{{ severity }}",
+  "timestamp": {{ timestamp }},
+  "fields": {{ json fields }}
+}
+```
+
+### Matcher recommendation
+
+Match the webhook targets on at least:
+
+- `Error`
+- `Unknown`
+
+That keeps the archive focused on actionable failures while still catching tasks that do not cleanly classify themselves as success or error.
+
 ## Requirements
 
 - Proxmox VE or Proxmox Backup Server
@@ -173,6 +329,16 @@ On Proxmox Backup Server:
 - The collector does not restart Proxmox services.
 - The collector does not prune, verify, sync, or delete backups.
 - The collector reads task metadata and task logs, then writes a local state file and sends an HTTP POST.
+
+## Expected Commit Bursts
+
+If you browse the repo commit log and see many `Archive Proxmox ...` commits clustered together, the common reasons are:
+
+1. Multiple failing tasks occurred close together.
+2. A timer run found several older failed tasks that had not been uploaded yet.
+3. Both the notification webhook and the full task-log collector archived related failure data.
+
+That pattern is expected with the current one-file-per-commit relay.
 
 ## Node-RED Security
 
