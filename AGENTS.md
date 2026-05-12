@@ -68,6 +68,18 @@ Expected relay behavior:
 4. write file through Forgejo or Gitea contents API
 5. return created path and commit URL
 
+## Starter Flow Artifact
+
+The file `node-red-flow.example.json` is the canonical reusable Node-RED starter flow for this project.
+
+Expectations:
+
+- it is sanitized
+- it is environment-driven
+- it is meant to be importable without hardcoded lab IPs or tokens
+
+If relay behavior changes, update the starter flow together with the README and this file.
+
 ## Proxmox Configuration Expectations
 
 Recommended webhook target names:
@@ -124,6 +136,7 @@ After changes, verify:
 5. one successful request returns a commit URL
 6. the host collector dry-run completes on both PVE and PBS
 7. the systemd timer starts cleanly on both PVE and PBS
+8. the starter Node-RED flow still matches the documented endpoints and env vars
 
 ## Documentation Rule
 

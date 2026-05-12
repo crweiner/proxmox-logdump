@@ -34,6 +34,19 @@ Proxmox VE / PBS host
 
 In the reference setup used here, the HTTP relay is Node-RED and the Git write is done through the Forgejo contents API. There is no local Git clone in the relay. Each successful file-create request becomes one Git commit.
 
+## Included Artifacts
+
+This project now includes:
+
+- `proxmox_tasklog_uploader.py`
+- `proxmox-tasklog-upload@.service`
+- `proxmox-tasklog-upload@.timer`
+- `proxmox-logdump.env.example`
+- `node-red-flow.example.json`
+- `AGENTS.md`
+
+If you want to reproduce the relay quickly, start with `node-red-flow.example.json`.
+
 ## Repository Layout
 
 The relay currently writes two top-level trees:
@@ -124,6 +137,74 @@ POST /api/v1/repos/<owner>/<repo>/contents/<path>
 
 Important implementation detail: the flow serializes every Forgejo write through one shared delay node so concurrent notifications do not collide on `refs/heads/main`.
 
+### Included starter flow
+
+The file `node-red-flow.example.json` is a sanitized Node-RED import you can use as a starting point.
+
+It exposes the four expected HTTP endpoints and writes directly to the Forgejo or Gitea contents API.
+
+The starter flow expects these Node-RED environment variables:
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `PROXMOX_SHARED_TOKEN` | Yes | Shared token validated from `X-Proxmox-Token` |
+| `FORGEJO_BASE_URL` | Yes | Forgejo or Gitea base URL, for example `http://forgejo:3000` |
+| `FORGEJO_OWNER` | Yes | Repo owner or org |
+| `FORGEJO_REPO` | Yes | Repo name |
+| `FORGEJO_API_TOKEN` | Yes | API token allowed to create repo contents |
+| `FORGEJO_BRANCH` | No | Branch name, defaults to `main` |
+
+### Node-RED import steps
+
+1. Import `node-red-flow.example.json`.
+2. Set the required Node-RED environment variables.
+3. Deploy the flow.
+4. Send a test `POST` to `/webhook/proxmox/pve`.
+5. Send a test `POST` to `/ingest/tasklog/pve`.
+6. Verify that Forgejo receives one commit per created file.
+
+### Node-RED smoke tests
+
+Notification test:
+
+```bash
+curl -X POST http://node-red-host:1880/webhook/proxmox/pve \
+  -H 'Content-Type: application/json' \
+  -H 'X-Proxmox-Token: replace-with-your-token' \
+  -d '{
+    "source": "pve",
+    "title": "Test notification",
+    "message": "This is a notification test",
+    "severity": "error",
+    "timestamp": 1778547604,
+    "fields": {
+      "hostname": "pve01",
+      "type": "vzdump"
+    }
+  }'
+```
+
+Task-log test:
+
+```bash
+curl -X POST http://node-red-host:1880/ingest/tasklog/pve \
+  -H 'Content-Type: application/json' \
+  -H 'X-Proxmox-Token: replace-with-your-token' \
+  -d '{
+    "source": "pve",
+    "node": "pve01",
+    "task_type": "vzdump",
+    "status": "ERROR",
+    "upid": "UPID:pve01:00012345:00000000:00000000:vzdump:100:root@pam:",
+    "started_at": 1778547604,
+    "ended_at": 1778547623,
+    "task": {
+      "upid": "UPID:pve01:00012345:00000000:00000000:vzdump:100:root@pam:"
+    },
+    "log_text": "INFO: starting\\nERROR: backup failed\\n"
+  }'
+```
+
 ## Proxmox Notification Setup
 
 The collector only handles full task logs. Notification webhooks are a separate Proxmox-side configuration and should also be documented because they explain why files appear under `events/`.
@@ -188,6 +269,18 @@ Match the webhook targets on at least:
 
 That keeps the archive focused on actionable failures while still catching tasks that do not cleanly classify themselves as success or error.
 
+### Minimal Proxmox UI checklist
+
+For each Proxmox system:
+
+1. Create the webhook target.
+2. Set the URL for the correct endpoint.
+3. Set `X-Proxmox-Token` to the shared token.
+4. Use the JSON body template shown above.
+5. Create a matcher that points `Error` and `Unknown` severities to that target.
+6. Run the built-in test action for the target.
+7. Verify a new file appears under `events/` in the repo.
+
 ## Requirements
 
 - Proxmox VE or Proxmox Backup Server
@@ -230,6 +323,13 @@ Use any small relay that can:
 
 Node-RED works well for this.
 
+The quickest path is:
+
+1. import `node-red-flow.example.json`
+2. set the six environment variables listed above
+3. deploy
+4. test with the sample `curl` requests
+
 Recommended file layout in Git:
 
 ```text
@@ -252,6 +352,13 @@ Create `/etc/default/proxmox-logdump`:
 ```bash
 PROXMOX_LOGDUMP_TOKEN=replace-with-your-shared-token
 PROXMOX_LOGDUMP_RELAY_BASE_URL=http://relay-host-or-ip:1880
+```
+
+Recommended optional tuning:
+
+```bash
+PROXMOX_LOGDUMP_LIMIT=50
+PROXMOX_LOGDUMP_COMMAND_TIMEOUT=45
 ```
 
 ### 4. Install on Proxmox VE
@@ -309,6 +416,31 @@ On Proxmox Backup Server:
 ```bash
 /usr/local/lib/proxmox-logdump/proxmox_tasklog_uploader.py --source pbs --backfill-seen
 ```
+
+### 8. Enable the timers
+
+On Proxmox VE:
+
+```bash
+systemctl enable --now proxmox-tasklog-upload@pve.timer
+systemctl status --no-pager proxmox-tasklog-upload@pve.timer
+```
+
+On Proxmox Backup Server:
+
+```bash
+systemctl enable --now proxmox-tasklog-upload@pbs.timer
+systemctl status --no-pager proxmox-tasklog-upload@pbs.timer
+```
+
+### 9. Verify end to end
+
+A clean end-to-end validation looks like this:
+
+1. Proxmox target test creates a JSON file under `events/...`
+2. Manual collector run creates a `.log` file under `task-logs/...`
+3. Forgejo shows one commit per archived file
+4. Subsequent timer runs do not re-upload the same UPIDs
 
 ## Environment Variables
 
