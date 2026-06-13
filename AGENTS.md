@@ -105,6 +105,7 @@ The Python collector:
 - reads recent tasks with Proxmox CLI tools
 - skips running tasks
 - skips already-seen UPIDs
+- skips known non-archive worker types such as `diskinit`, `logrotate`, and `termproxy`
 - fetches task logs for failed or suspicious tasks
 - uploads each qualifying task log
 - records seen UPIDs in a local state file

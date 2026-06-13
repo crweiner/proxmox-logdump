@@ -9,6 +9,8 @@ This project has two parts:
 
 The collector is read-only with respect to Proxmox itself. It lists recent tasks, fetches task logs for failed jobs, keeps a local state file of already-uploaded UPIDs, and POSTs matching logs to the relay.
 
+To avoid noisy or unhelpful uploads on current Proxmox builds, the collector ignores known non-archive worker types such as `diskinit`, `logrotate`, and `termproxy`.
+
 ## What It Captures
 
 - Proxmox VE host task logs from `pvenode task list` and `pvenode task log`
@@ -260,6 +262,8 @@ Body template:
 }
 ```
 
+If a CLI-created webhook target behaves oddly around custom headers on your Proxmox release, re-save the target once in the Proxmox Notifications UI. The UI path can be more reliable for header editing on some releases.
+
 ### Matcher recommendation
 
 Match the webhook targets on at least:
@@ -359,6 +363,12 @@ Recommended optional tuning:
 ```bash
 PROXMOX_LOGDUMP_LIMIT=50
 PROXMOX_LOGDUMP_COMMAND_TIMEOUT=45
+```
+
+For PBS environments with larger or slower task logs, a higher timeout is reasonable:
+
+```bash
+PROXMOX_LOGDUMP_COMMAND_TIMEOUT=180
 ```
 
 ### 4. Install on Proxmox VE

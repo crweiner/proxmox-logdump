@@ -62,6 +62,12 @@ FAILURE_MARKERS = (
     "exit code 255",
 )
 
+SKIP_WORKER_TYPES = {
+    "diskinit",
+    "logrotate",
+    "termproxy",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -280,6 +286,13 @@ def main() -> int:
             continue
 
         if is_running(task):
+            continue
+
+        worker_type = str(task.get("type") or task.get("worker_type") or "").strip().lower()
+        if worker_type in SKIP_WORKER_TYPES:
+            if args.backfill_seen:
+                seen.add(upid)
+                changed = True
             continue
 
         status = str(task.get("status") or task.get("exitstatus") or "")
